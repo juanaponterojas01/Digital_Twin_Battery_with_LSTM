@@ -13,7 +13,8 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-# This package must be run from the project root so that curve_fitting is importable.
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from curve_fitting.ocv_lookup import OCVModel
 
 import config
@@ -179,3 +180,13 @@ def plot_nyquist(eis_csv_dir: str = None, save: bool = True) -> None:
         fig.savefig(path, dpi=150, bbox_inches="tight")
         print(f"Saved: {path}")
     plt.close(fig)
+
+
+if __name__ == "__main__":
+    PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  
+    DRIVE_CYCLES = os.path.join(PROJECT_DIR, "data", "25degC_prepared", "Drive cycles")
+    for fname in sorted(os.listdir(DRIVE_CYCLES)):
+        if fname.lower().endswith(".csv"):
+            plot_drive_cycle(os.path.join(DRIVE_CYCLES, fname))
+    plot_nyquist()
+    plot_ocv_soc()

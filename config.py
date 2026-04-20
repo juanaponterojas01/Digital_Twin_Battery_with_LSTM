@@ -51,5 +51,7 @@ LR_PATIENCE = 5  # ReduceLROnPlateau patience
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"  # Compute device ("cuda" or "cpu")
 
 C_NOMINAL = 2.9  # Nominal battery capacity in Ah (Panasonic 18650PF)
+ETA_CHARGE = 0.98  # Coulombic efficiency during charging
+ETA_DISCHARGE = 1.0  # Coulombic efficiency during discharging
 R_IN_OCV_CORRECTION = 0.022  # Ohmic resistance correction for C/20 OCV extraction (Ohm)
 MILLIOHM_TO_OHM = 1e-3  # Conversion factor from mOhm to Ohm

@@ -5,11 +5,27 @@ __pycache__/
 dist/
 build/
 
-# Checkpoints and results
+# results
 results/
 
-# Plots and visualizations
-data/data_visualization/
+# Images (all formats, all directories)
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+*.svg
+*.tiff
+*.tif
+*.webp
+
+# Zip and archive files
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.7z
+*.rar
 
 # IDE
 .vscode/
@@ -27,6 +43,3 @@ Thumbs.db
 
 # opencode
 .opencode
-
-# Dataset zip (too large)
-data/*.zip
