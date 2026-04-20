@@ -447,7 +447,7 @@ def train_model(
     lr_patience = config.LR_PATIENCE
     trained_models_dir = config.TRAINED_MODELS_DIR
 
-    model_name = f"physics_lstm_beta_{beta}" if is_physics else "vanilla_lstm"
+    model_name = "physics_lstm" if is_physics else "vanilla_lstm"
 
     print(f"\n{'=' * 60}")
     print(f"Training: {model_name}")

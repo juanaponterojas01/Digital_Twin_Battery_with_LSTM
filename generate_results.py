@@ -32,9 +32,9 @@ from inference_utils import (
     predict_cycle_with_uncertainty,
 )
 
-MODEL_NAMES = ["vanilla_lstm", "physics_lstm_beta_0.1"]
-MODEL_LABELS = {"vanilla_lstm": "Vanilla LSTM", "physics_lstm_beta_0.1": "Physics LSTM (beta=0.1)"}
-MODEL_COLORS = {"vanilla_lstm": "tab:blue", "physics_lstm_beta_0.1": "tab:orange"}
+MODEL_NAMES = ["vanilla_lstm", "physics_lstm"]
+MODEL_LABELS = {"vanilla_lstm": "Vanilla LSTM", "physics_lstm": "Physics LSTM (beta=0.1)"}
+MODEL_COLORS = {"vanilla_lstm": "tab:blue", "physics_lstm": "tab:orange"}
 
 RESULTS_DIR = os.path.join(config.PROJECT_DIR, "results")
 TRAINED_DIR = config.TRAINED_MODELS_DIR
@@ -67,7 +67,7 @@ def plot_training_curves_overlay(save_path):
 
     for name, label, color in [
         ("vanilla_lstm", "Vanilla LSTM", "tab:blue"),
-        ("physics_lstm_beta_0.1", "Physics LSTM (β=0.1)", "tab:orange"),
+        ("physics_lstm", "Physics LSTM (β=0.1)", "tab:orange"),
     ]:
         csv_path = os.path.join(TRAINED_DIR, f"training_stats_{name}.csv")
         if not os.path.isfile(csv_path):
@@ -108,7 +108,7 @@ def build_comparison_table(all_results):
     rows = []
     for c in cycles:
         v = all_results["vanilla_lstm"][c]
-        p = all_results["physics_lstm_beta_0.1"][c]
+        p = all_results["physics_lstm"][c]
         rmse_delta = ((p["RMSE"] - v["RMSE"]) / v["RMSE"]) * 100
         mae_delta = ((p["MAE"] - v["MAE"]) / v["MAE"]) * 100
         maxerr_delta = ((p["Max_Error"] - v["Max_Error"]) / v["Max_Error"]) * 100
@@ -207,13 +207,13 @@ def main():
 
     print("Loading models...")
     model_vanilla = load_model("vanilla_lstm", device)
-    model_physics = load_model("physics_lstm_beta_0.1", device)
+    model_physics = load_model("physics_lstm", device)
     if model_vanilla is None:
         raise FileNotFoundError("Checkpoint vanilla_lstm.pt not found")
     if model_physics is None:
-        raise FileNotFoundError("Checkpoint physics_lstm_beta_0.1.pt not found")
+        raise FileNotFoundError("Checkpoint physics_lstm.pt not found")
 
-    all_results = {"vanilla_lstm": {}, "physics_lstm_beta_0.1": {}}
+    all_results = {"vanilla_lstm": {}, "physics_lstm": {}}
 
     for cycle_name in config.TEST_CYCLES:
         print(f"\n[{cycle_name}]")
@@ -226,7 +226,7 @@ def main():
         metrics_v = compute_metrics(soc_true, soc_vanilla)
         metrics_p = compute_metrics(soc_true, soc_physics)
         all_results["vanilla_lstm"][cycle_name] = metrics_v
-        all_results["physics_lstm_beta_0.1"][cycle_name] = metrics_p
+        all_results["physics_lstm"][cycle_name] = metrics_p
 
         print(f"  Vanilla — RMSE={metrics_v['RMSE']:.4f}  MAE={metrics_v['MAE']:.4f}")
         print(f"  Physics — RMSE={metrics_p['RMSE']:.4f}  MAE={metrics_p['MAE']:.4f}")
