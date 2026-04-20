@@ -1,0 +1,34 @@
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Checkpoints and results (large files)
+results/
+trained_models/
+
+# Data (downloaded/generated)
+data/25degC_csv/
+data/25degC_prepared/
+
+# Plots and visualizations
+data/data_visualization/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# prompts
+*.md
+!*README.md
+
+# opencode
+.opencode

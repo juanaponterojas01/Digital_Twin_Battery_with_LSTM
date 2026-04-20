@@ -1,0 +1,11 @@
+cff-version: 1.2.0
+title: "Digital_Twin_Battery_with_LSTM"
+message: "If you use this software in your research, please cite it as below."
+type: software
+author:
+  - family-name: "Aponte"
+    given-name: "Juan"
+repository: "https://github.com/juanaponterojas01/DT_Battery_LSTM"
+license: "MIT"
+version: "1.0.0"
+date-released: "2026-04-16"
