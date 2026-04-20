@@ -13,6 +13,8 @@ import pandas as pd
 from scipy.signal import butter, filtfilt
 from sklearn.preprocessing import StandardScaler
 
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config
 
 C_NOMINAL = config.C_NOMINAL

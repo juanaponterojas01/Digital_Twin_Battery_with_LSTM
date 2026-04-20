@@ -1,8 +1,11 @@
-"""Download and convert the Panasonic 18650PF battery dataset.
+"""Convert the Panasonic 18650PF battery dataset.
 
-Downloads the 25degC folder from the Mendeley dataset, converts all .mat
-files to .csv (dropping the TimeStamp column), and stores the result in
+Extracts the 25degC folder from the local Mendeley dataset zip, converts all
+.mat files to .csv (dropping the TimeStamp column), and stores the result in
 ``data/25degC_csv/``.
+
+The raw zip file must be placed at ``data/wykht8y7tg-1.zip``.
+Download it from https://data.mendeley.com/datasets/wykht8y7tg/1
 """
 
 import os
@@ -10,13 +13,12 @@ import shutil
 import argparse
 import tempfile
 import zipfile
-import urllib.request
 import scipy.io
 import numpy as np
 import pandas as pd
 
-DATASET_URL = "https://data.mendeley.com/public-files/datasets/wykht8y7tg/files/b5e88b32-5e3a-4e83-8e68-5185c9cf6bef/file_downloaded"
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "25degC_csv")
+RAW_ZIP = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wykht8y7tg-1.zip")
 
 
 def mat_to_dataframe(mat_path: str) -> pd.DataFrame:
@@ -69,29 +71,31 @@ def convert_directory(source_dir: str, dest_dir: str) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Download and convert the Panasonic 18650PF 25degC dataset."
+        description="Convert the Panasonic 18650PF 25degC dataset from a local zip."
     )
     parser.add_argument(
-        "--url", type=str, default=DATASET_URL,
-        help="Direct download URL for the dataset zip.",
+        "--zip", type=str, default=RAW_ZIP,
+        help="Path to the local dataset zip file.",
     )
     args = parser.parse_args()
+
+    if not os.path.isfile(args.zip):
+        print(f"ERROR: Zip file not found at {args.zip}")
+        print("Please download the dataset from https://data.mendeley.com/datasets/wykht8y7tg/1")
+        print("and place it at the path above.")
+        return
 
     if os.path.isdir(DATA_DIR) and any(
         f.endswith(".csv") for _, _, files in os.walk(DATA_DIR) for f in files
     ):
-        print(f"CSV data already exists in {DATA_DIR}. Skipping download.")
+        print(f"CSV data already exists in {DATA_DIR}. Skipping conversion.")
         return
 
     with tempfile.TemporaryDirectory() as tmp:
-        zip_path = os.path.join(tmp, "dataset.zip")
         extract_dir = os.path.join(tmp, "raw")
 
-        print(f"Downloading dataset from {args.url} ...")
-        urllib.request.urlretrieve(args.url, zip_path)
-        print("Download complete. Extracting ...")
-
-        with zipfile.ZipFile(zip_path, "r") as zf:
+        print(f"Extracting dataset from {args.zip} ...")
+        with zipfile.ZipFile(args.zip, "r") as zf:
             zf.extractall(extract_dir)
 
         source_25deg = None
