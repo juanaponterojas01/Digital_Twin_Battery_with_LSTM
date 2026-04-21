@@ -23,6 +23,7 @@ from inference_utils import compute_metrics
 
 logger = logging.getLogger(__name__)
 
+effective_dropout = 0.0 if not config.DROPOUT_CONDITION else config.DROPOUT
 
 @dataclass
 class TrainingMetrics:
@@ -86,7 +87,16 @@ def _compute_losses(
     with torch.no_grad():
         for x, y, v, i in loader:
             x, y, v, i = x.to(device), y.to(device), v.to(device), i.to(device)
-            soc_pred = model(x)
+            # Model 1 (vanilla, dropout): apply_dropout=None → auto (OFF in eval mode)
+            # Model 2 (physics, dropout): apply_dropout=True → forced ON for consistent validation
+            # Model 3 (physics, no dropout): apply_dropout=False → forced OFF
+            if not config.DROPOUT_CONDITION:
+                apply_dropout_val = False
+            elif is_physics:
+                apply_dropout_val = True
+            else:
+                apply_dropout_val = None
+            soc_pred = model(x, apply_dropout=apply_dropout_val)
 
             if is_physics:
                 loss, ml, phys = loss_fn(soc_pred, y, v, i)
@@ -153,7 +163,9 @@ def train_one_epoch(
 
     for x, y, v, i in loader:
         x, y, v, i = x.to(device), y.to(device), v.to(device), i.to(device)
-        soc_pred = model(x)
+        # Model 3 (physics, no dropout): apply_dropout=False disables dropout during training
+        # Models 1 & 2 (dropout active): apply_dropout=None → auto (ON in train mode)
+        soc_pred = model(x, apply_dropout=None if config.DROPOUT_CONDITION else False)
 
         if is_physics:
             loss, ml, phys = loss_fn(soc_pred, y, v, i)
@@ -304,7 +316,8 @@ def _save_checkpoint(
         "beta": beta,
         "hidden_size": config.HIDDEN_SIZE,
         "num_layers": config.NUM_LAYERS,
-        "dropout": config.DROPOUT,
+        "dropout": effective_dropout,
+        "dropout_condition": config.DROPOUT_CONDITION,
         "seq_len": config.SEQ_LEN,
     }
     checkpoint_path = os.path.join(trained_models_dir, f"{model_name}.pt")
@@ -447,22 +460,27 @@ def train_model(
     lr_patience = config.LR_PATIENCE
     trained_models_dir = config.TRAINED_MODELS_DIR
 
-    model_name = "physics_lstm" if is_physics else "vanilla_lstm"
+    model_name = "physics_lstm_no_dropout" if (is_physics and not config.DROPOUT_CONDITION) else (
+        "physics_lstm" if is_physics else "vanilla_lstm"
+    )
 
     print(f"\n{'=' * 60}")
     print(f"Training: {model_name}")
     print(f"Device: {device}")
-    print(f"Physics: {is_physics}  Beta: {beta}")
+    print(f"Physics: {is_physics}  Beta: {beta}  Dropout: {effective_dropout}")
     print(f"{'=' * 60}\n")
 
     os.makedirs(trained_models_dir, exist_ok=True)
 
     # Initialize model
+    # When DROPOUT_CONDITION=False, dropout is completely disabled (p=0.0)
+    # since the model is regularized solely by the physics loss.
+    
     model = VanillaLSTM(
         input_size=config.INPUT_SIZE,
         hidden_size=config.HIDDEN_SIZE,
         num_layers=config.NUM_LAYERS,
-        dropout=config.DROPOUT,
+        dropout=effective_dropout,
     ).to(device)
 
     total_params = sum(p.numel() for p in model.parameters())

@@ -35,7 +35,8 @@ BATCH_SIZE = 64
 INPUT_SIZE = 2  # [Current_norm, Voltage_norm]
 HIDDEN_SIZE = 64
 NUM_LAYERS = 1  # Vanilla LSTM
-DROPOUT = 0.2  # MC Dropout rate for uncertainty estimation
+DROPOUT = 0.05  # MC Dropout rate for uncertainty estimation
+DROPOUT_CONDITION = True  # Whether dropout is active during training (False → physics-only regularization)
 
 LEARNING_RATE = 1e-3  # Adam
 MAX_EPOCHS = 100  # With early stopping

@@ -2,9 +2,10 @@
 
 Physics-informed LSTM-based digital twin for SOC estimation of the Panasonic 18650PF (2.9 Ah) lithium-ion battery, using the dataset from [Kollmeyer, 2017](https://data.mendeley.com/datasets/wykht8y7tg/1).
 
-The project compares two training regimes for the same LSTM architecture:
-- **Vanilla LSTM** — trained with MSE loss only
-- **Physics-Informed LSTM** — trained with MSE loss + physics consistency loss based on Kirchhoff's voltage law for an equivalent circuit model
+The project compares three training regimes for the same LSTM architecture:
+- **Vanilla LSTM** — trained with MSE loss and dropout regularization (p = 0.05)
+- **Physics-Informed LSTM** — trained with MSE + physics consistency loss and dropout (p = 0.05)
+- **Physics-Informed LSTM (no dropout)** — trained with MSE + physics consistency loss, no dropout (physics loss is the sole regularizer)
 
 ## Project Structure
 
@@ -149,6 +150,10 @@ nn.LSTM(input_size=2, hidden_size=64, num_layers=1, batch_first=True)
 lstm_out (batch, seq_len, 64)
     │
     ▼
+nn.Dropout(p=0.05)  ← Active during training for Models 1 & 2; bypassed for Model 3
+                       Active during MC inference for Models 1 & 2
+    │
+    ▼
 nn.Linear(64, 1)
     │
     ▼
@@ -163,6 +168,10 @@ Output (batch, seq_len)         ← SOC prediction at every timestep
 - **Sigmoid output**: SOC is bounded in (0, 1). The sigmoid activation enforces this constraint, which is critical for the physics-informed model — the OCV and R_in polynomials are only valid for SOC ∈ [0, 1], and predicting outside this range would cause numerical instability.
 - **Sequence-to-sequence**: The model outputs SOC at every timestep (not just the last), providing richer gradient signal and enabling the physics loss to be applied at every step.
 - **Input features**: `[Current_norm, Voltage_norm]` — the two signals directly linked by the circuit equation V = OCV(SOC) + I·R_in(SOC). Temperature is excluded because the physics model (OCV, R_in lookup tables) is temperature-independent (only 25 °C data available).
+- **Dropout control**: The `apply_dropout` parameter in `forward()` controls whether dropout is applied:
+  - `None` (default) — auto: dropout ON in training mode, OFF in eval mode
+  - `True` — force dropout ON (for MC uncertainty estimation)
+  - `False` — force dropout OFF (for physics-informed training without dropout)
 - **17,473 trainable parameters**.
 
 ### Train / Validation / Test Split
@@ -211,17 +220,27 @@ Both polynomials are implemented as differentiable `nn.Module` in `physics.py` u
 
 ### Loss Functions
 
-#### Vanilla LSTM Loss (data-driven only)
+#### Model 1: Vanilla LSTM Loss (data-driven with dropout)
 
 $$L = MSE(SOC_{pred},\, SOC_{true})$$
 
-#### Physics-Informed LSTM Loss
+Dropout (p = 0.05) is active during training and validation, and provides uncertainty estimation at inference.
+
+#### Model 2: Physics-Informed LSTM Loss (with dropout)
 
 $$L = \alpha \cdot \underbrace{MSE(SOC_{pred},\, SOC_{true})}_{L_{data}} + \beta \cdot \underbrace{MSE(V_{measured},\, OCV(SOC_{pred}) + I \cdot R_{in}(SOC_{pred}))}_{L_{physics}}$$
 
-With $\alpha = 1.0$ and $\beta = 0.1$ (default).
+With $\alpha = 1.0$ and $\beta = 0.1$ (default). Dropout (p = 0.05) is active during training and also during validation (to keep the physics loss signal consistent). At inference, dropout is OFF for deterministic predictions; activated via `apply_dropout=True` for MC uncertainty.
 
-**What the physics loss does**: It measures how well the predicted SOC is consistent with Kirchhoff's voltage law. If the LSTM predicts an SOC that, when plugged into the circuit model, does not match the measured terminal voltage, the physics loss is high. This acts as a soft constraint / regularizer that steers predictions toward physically plausible values.
+#### Model 3: Physics-Informed LSTM Loss (no dropout)
+
+Same loss function as Model 2, but dropout is **completely disabled** (`apply_dropout=False`). The physics consistency loss acts as the sole regularizer. This configuration tests whether the physics loss alone provides sufficient regularization without dropout. MC uncertainty estimation is **not available** for this model.
+
+#### Why three models?
+
+Dropout noise passes through the nonlinear OCV (7th-degree) and R_in (3rd-degree) polynomials in the physics loss. By Jensen's inequality, $E[OCV(SOC + \epsilon)] \neq OCV(E[SOC + \epsilon])$ for nonlinear functions — the physics constraint is optimized for dropout-corrupted SOC values that don't match the clean SOC produced at inference. Model 3 removes this inconsistency by disabling dropout entirely, allowing the physics loss to operate on clean LSTM representations.
+
+**What the physics loss does** (Models 2 & 3): It measures how well the predicted SOC is consistent with Kirchhoff's voltage law. If the LSTM predicts an SOC that, when plugged into the circuit model, does not match the measured terminal voltage, the physics loss is high. This acts as a soft constraint / regularizer that steers predictions toward physically plausible values.
 
 **Why this helps**:
 1. **Regularization** — prevents the model from fitting noise in the SOC labels (which come from approximate Coulomb counting).
@@ -230,7 +249,7 @@ With $\alpha = 1.0$ and $\beta = 0.1$ (default).
 
 **β weighting**: Too high forces the model to fit the approximate physics (which neglects RC dynamics), ignoring the data. Too low gives no physics benefit. β = 0.1 is a starting point where the physics loss contributes ~9% of the total loss.
 
-**Key design principle**: Both models share the identical LSTM architecture. The only difference is the loss function used during training. This ensures a fair comparison — any performance difference is attributable to the physics loss, not architectural differences.
+**Key design principle**: All three models share the identical LSTM architecture. The only differences are the loss function (MSE vs. MSE+physics) and whether dropout is active. This ensures a fair comparison — any performance difference is attributable to the loss function and/or dropout configuration.
 
 ### Training Details
 
@@ -243,6 +262,19 @@ With $\alpha = 1.0$ and $\beta = 0.1$ (default).
 | Early stopping | patience = 15 (on validation loss) |
 | Batch size | 64 |
 
+### Three-Model Comparison
+
+| | Model 1: Vanilla LSTM | Model 2: Physics LSTM | Model 3: Physics LSTM (no dropout) |
+|---|---|---|---|
+| **Command** | `python train.py` | `python train.py --physics` | `python train.py --physics --no-dropout` |
+| **Loss function** | MSE | MSE + Physics | MSE + Physics |
+| **Dropout during training** | ON (p = 0.05) | ON (p = 0.05) | OFF |
+| **Dropout during validation** | OFF | ON (p = 0.05) | OFF |
+| **Dropout during inference** | OFF | OFF | OFF |
+| **MC uncertainty** | Available (`apply_dropout=True`) | Available (`apply_dropout=True`) | Not available |
+| **Regularization** | Dropout only | Dropout + Physics | Physics only |
+| **Checkpoint name** | `vanilla_lstm.pt` | `physics_lstm.pt` | `physics_lstm_no_dropout.pt` |
+
 ### Evaluation Metrics
 
 For each test cycle:
@@ -253,37 +285,49 @@ For each test cycle:
 
 ### Monte Carlo Uncertainty
 
-The LSTM includes dropout (p = 0.2) which is kept active during inference for uncertainty estimation. Running multiple stochastic forward passes produces a distribution of SOC predictions per timestep, from which the mean prediction and standard deviation are computed. The 95% confidence band (mean ± 2σ) is plotted alongside the true SOC for each test cycle via `generate_results.py`.
+The LSTM includes dropout (p = 0.05) which can be activated during inference for uncertainty estimation. Running multiple stochastic forward passes (with `apply_dropout=True`) produces a distribution of SOC predictions per timestep, from which the mean prediction and standard deviation are computed. The 95% confidence band (mean ± 2σ) is plotted alongside the true SOC for each test cycle via `generate_results.py`.
+
+**Availability by model**:
+- **Model 1** (Vanilla, dropout): MC uncertainty available
+- **Model 2** (Physics, dropout): MC uncertainty available
+- **Model 3** (Physics, no dropout): MC uncertainty **not available** — raises `ValueError` if attempted. Since dropout was never active during training, stochastic forward passes would produce meaningless uncertainty estimates.
 
 ### Results Comparison
 
-Run `python generate_results.py` to evaluate both models and produce:
+Run `python generate_results.py` to evaluate all trained models and produce:
 - `results/model_comparison.csv` — side-by-side per-cycle metrics with percentage deltas
 - `results/model_comparison.json` — same data in JSON format
-- `results/soc_<cycle>.png` — SOC prediction plots with 95% confidence bands
-- `results/training_curves_overlay.png` — train/val loss curves for both models
+- `results/soc_<cycle>.png` — SOC prediction plots with 95% confidence bands (Models 1 & 2 only)
+- `results/training_curves_overlay.png` — train/val loss curves for all models
 - `results/val_rmse_comparison.png` — validation RMSE over epochs
 
 ## Usage
 
 Both models can also be trained on Google Colab using `train_colab.ipynb`.
 
-### Train the Vanilla LSTM
+### Train Model 1: Vanilla LSTM (with dropout)
 
 ```bash
 python train.py
 ```
 
-### Train the Physics-Informed LSTM (β = 0.1)
+### Train Model 2: Physics-Informed LSTM (with dropout)
 
 ```bash
 python train.py --physics
 ```
 
-You can optionally override the default beta:
+### Train Model 3: Physics-Informed LSTM (no dropout)
+
+```bash
+python train.py --physics --no-dropout
+```
+
+You can optionally override the default beta for physics models:
 
 ```bash
 python train.py --physics --beta 0.1
+python train.py --physics --no-dropout --beta 0.1
 ```
 
 ### End-to-End Evaluation
@@ -292,9 +336,9 @@ python train.py --physics --beta 0.1
 python generate_results.py
 ```
 
-Evaluates both trained models across all test cycles and generates:
-- **SOC prediction plots** with Monte Carlo dropout 95% confidence bands for each test cycle
-- **Training curves overlay** (train/val loss for both models)
+Evaluates all trained models across all test cycles and generates:
+- **SOC prediction plots** with Monte Carlo dropout 95% confidence bands for each test cycle (Models 1 & 2 only; Model 3 has no MC uncertainty)
+- **Training curves overlay** (train/val loss for all models)
 - **Validation RMSE comparison** over epochs
 - **Comparison table** with per-cycle RMSE, MAE, and Max Error (saved as CSV and JSON)
 
@@ -303,14 +347,15 @@ Options:
 - `--device cpu` — force CPU inference
 - `--mc-iterations 50` — number of MC dropout passes (default: 50)
 
-### Utility Module (`test_model.py`)
+### Utility Module (`inference_utils.py`)
 
 Provides reusable functions for loading models and running predictions:
 - `load_model(name, device)` — load a checkpoint from `trained_models/`
 - `predict_cycle(model, dataset, device)` — deterministic inference
-- `predict_cycle_with_uncertainty(model, dataset, device, n_iterations)` — MC dropout predictions returning (mean, std)
-- `evaluate_cycle_metrics(model, test_loaders, device)` — compute per-cycle RMSE, MAE, Max Error
+- `predict_cycle_with_uncertainty(model, dataset, device, n_iterations)` — MC dropout predictions returning (mean, std). Raises `ValueError` for Model 3 (no dropout).
 - `compute_metrics(soc_true, soc_pred)` — compute RMSE, MAE, Max Error for arrays
+
+Note: `predict_cycle_with_uncertainty()` raises a `ValueError` when called on a model trained with `--no-dropout`, since MC uncertainty estimation requires a trained dropout layer.
 
 ### Visualization (`data/visualize_data.py`)
 
@@ -344,7 +389,8 @@ plot_nyquist()
 | `GRAD_CLIP` | 1.0 | Maximum gradient norm for gradient clipping |
 | `ALPHA` | 1.0 | Weight for the data-driven MSE loss term (L_data) |
 | `BETA` | 0.1 | Weight for the physics consistency loss term (L_physics) |
-| `DROPOUT` | 0.2 | Dropout rate for MC uncertainty estimation |
+| `DROPOUT` | 0.05 | Dropout rate for MC uncertainty estimation and regularization |
+| `DROPOUT_CONDITION` | True | Whether dropout is active during training (False → physics-only regularization via --no-dropout) |
 | `LR_FACTOR` | 0.5 | Factor by which the learning rate is reduced on plateau |
 | `LR_PATIENCE` | 5 | Number of epochs with no val loss improvement before reducing LR |
 
@@ -359,3 +405,5 @@ If you use this software in your work, please cite:
 Juan Aponte. (2026). Digital_Twin_Battery_with_LSTM(Version 1.0)
 
 
+!apt install file
+!file /content/dt_battery_lstm.zip

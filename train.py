@@ -1,11 +1,14 @@
 """Training script for battery SOC estimation models.
 
 Usage:
-    # Train vanilla LSTM
+    # Train vanilla LSTM (with dropout)
     python train.py
 
-    # Train physics-informed LSTM
-    python train.py --physics --beta 0.1
+    # Train physics-informed LSTM (with dropout)
+    python train.py --physics
+
+    # Train physics-informed LSTM (without dropout — physics-only regularization)
+    python train.py --physics --no-dropout
 """
 
 import argparse
@@ -32,7 +35,16 @@ def main():
         default=config.BETA,
         help=f"Weight for physics loss (default: {config.BETA}).",
     )
+    parser.add_argument(
+        "--no-dropout",
+        action="store_true",
+        help="Disable dropout entirely (physics-only regularization). "
+             "MC uncertainty estimation will not be available.",
+    )
     args = parser.parse_args()
+
+    if args.no_dropout:
+        config.DROPOUT_CONDITION = False
 
     train_loader, val_loader, test_loaders = create_dataloaders()
 

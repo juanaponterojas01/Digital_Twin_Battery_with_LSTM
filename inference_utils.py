@@ -7,7 +7,7 @@ This module provides functions to:
 """
 
 import os
-from typing import TYPE_CHECKING
+
 
 import numpy as np
 import torch
@@ -16,9 +16,7 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error
 
 import config
 from model import VanillaLSTM
-
-if TYPE_CHECKING:
-    from torch.utils.data import Dataset
+from torch.utils.data import Dataset
 
 
 def compute_metrics(soc_true: np.ndarray, soc_pred: np.ndarray) -> dict[str, float]:
@@ -111,6 +109,10 @@ def predict_cycle_with_uncertainty(
 ) -> tuple[np.ndarray, np.ndarray]:
     """Run Monte Carlo Dropout inference on a dataset.
 
+    Not available for models trained with --no-dropout (DROPOUT_CONDITION=False),
+    since dropout was never active during training and MC uncertainty would be
+    meaningless.
+
     Parameters
     ----------
     model : VanillaLSTM
@@ -128,8 +130,19 @@ def predict_cycle_with_uncertainty(
         (mean_soc, std_soc) where:
         - mean_soc: (N,) SOC mean prediction for each timestep
         - std_soc: (N,) SOC uncertainty (standard deviation)
+
+    Raises
+    ------
+    ValueError
+        If the model was trained with --no-dropout (MC uncertainty is not available).
     """
-  
+    if model.dropout.p == 0.0:
+        raise ValueError(
+            "MC uncertainty estimation is not available for models trained with "
+            "--no-dropout. This model was regularized solely by the physics loss "
+            "and its dropout layer has probability 0."
+        )
+
     all_x = [dataset[idx][0] for idx in range(len(dataset))]
     batch_x = torch.stack(all_x).to(device)
     mean_soc, std_soc = model.predict_mc_uncertainty(

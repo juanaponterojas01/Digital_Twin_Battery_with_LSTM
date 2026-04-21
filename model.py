@@ -22,7 +22,7 @@ class VanillaLSTM(nn.Module):
     num_layers : int
         Number of stacked LSTM layers.
     dropout : float
-        Dropout probability applied after the LSTM output (default: 0.2).
+        Dropout probability applied after the LSTM output .
     """
 
     def __init__(self, input_size: int = 2, hidden_size: int = 64,
@@ -34,13 +34,18 @@ class VanillaLSTM(nn.Module):
         self.fc = nn.Linear(hidden_size, 1)
         self.sigmoid = nn.Sigmoid()
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, apply_dropout: bool | None = None) -> torch.Tensor:
         """Forward pass.
 
         Parameters
         ----------
         x : torch.Tensor
             Input tensor of shape (batch, seq_len, input_size).
+        apply_dropout : bool | None
+            Controls dropout behavior:
+            - None  → auto (dropout ON in train mode, OFF in eval mode)
+            - True  → force dropout ON (for MC uncertainty estimation)
+            - False → force dropout OFF (for physics-informed training without dropout)
 
         Returns
         -------
@@ -48,16 +53,17 @@ class VanillaLSTM(nn.Module):
             Predicted SOC of shape (batch, seq_len), values in (0, 1).
         """
         lstm_out, _ = self.lstm(x)
-        lstm_out = self.dropout(lstm_out)
+        if apply_dropout is True or (apply_dropout is None and self.training):
+            lstm_out = self.dropout(lstm_out)
         soc = self.sigmoid(self.fc(lstm_out))
         return soc.squeeze(-1)
 
     def predict_mc_uncertainty(self, x: torch.Tensor, n_iterations: int = 50):
         """Monte Carlo Dropout for uncertainty estimation.
 
-        Works with already trained models. Sets the model to train mode
-        to activate dropout, performs multiple stochastic forward passes,
-        then returns the model to eval mode.
+        Performs multiple stochastic forward passes with dropout activated
+        to estimate prediction uncertainty. Not available for models trained
+        with --no-dropout (DROPOUT_CONDITION=False).
 
         Parameters
         ----------
@@ -72,19 +78,26 @@ class VanillaLSTM(nn.Module):
             (mean_pred, std_pred) where:
             - mean_pred: (batch, seq_len) — SOC estimate
             - std_pred: (batch, seq_len) — Uncertainty (standard deviation)
+
+        Raises
+        ------
+        ValueError
+            If dropout probability is 0 (MC uncertainty requires p > 0).
         """
-        self.train()
+        if self.dropout.p == 0.0:
+            raise ValueError(
+                "MC dropout uncertainty estimation requires dropout probability > 0. "
+                "This model was trained with --no-dropout and cannot produce uncertainty estimates."
+            )
 
         predictions = []
         with torch.no_grad():
             for _ in range(n_iterations):
-                pred = self(x)
+                pred = self(x, apply_dropout=True)
                 predictions.append(pred.cpu().numpy())
 
         predictions = np.array(predictions)
         mean_pred = predictions.mean(axis=0)
         std_pred = predictions.std(axis=0)
-
-        self.eval()
 
         return mean_pred, std_pred
