@@ -7,11 +7,9 @@ counting, and writes the prepared data to ``data/25degC_prepared/``.
 
 Normalization uses a single StandardScaler fitted on the training cycle
 (LA92) and applied to all files, ensuring consistent input scaling across
-cycles. The scaler parameters (mean, std) are saved to
-``data/25degC_prepared/scaler_params.json``.
+cycles.
 """
 
-import json
 import os
 import argparse
 import numpy as np
@@ -34,9 +32,6 @@ SOURCE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "25degC_cs
 DEST_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "25degC_prepared")
 TRAIN_CYCLE_FILENAME = config.DRIVE_CYCLES[config.TRAIN_CYCLE]
 
-SCALE_FEATURES = ["Current_filt", "Voltage_filt", "Temp_degC_filt"]
-SCALE_OUTPUTS = ["Current_norm", "Voltage_norm", "Temp_degC_norm"]
-
 
 def butterworth_lowpass_filter(data: np.ndarray, cutoff_hz: float,
                                fs: float, order: int = FILTER_ORDER) -> np.ndarray:
@@ -53,6 +48,38 @@ def butterworth_lowpass_filter(data: np.ndarray, cutoff_hz: float,
         return data.copy()
     b, a = butter(order, normalized_cutoff, btype="low")
     return filtfilt(b, a, data)
+
+
+def _filter_signals(df: pd.DataFrame, cutoff_hz: float) -> dict[str, np.ndarray]:
+    """Apply Butterworth low-pass filter to Current, Voltage, and Temp columns."""
+    time_s = df["Time"].values.astype(np.float64)
+    dt = np.diff(time_s)
+    valid_dt = dt[dt > 0]
+    fs = 1.0 / np.median(valid_dt) if len(valid_dt) > 0 else 1.0
+
+    current = df["Current"].values.astype(np.float64)
+    voltage = df["Voltage"].values.astype(np.float64)
+    temp = df["Battery_Temp_degC"].values.astype(np.float64)
+    chamber_temp = df["Chamber_Temp_degC"].values.astype(np.float64)
+
+    if fs > 2 * cutoff_hz:
+        current_filt = butterworth_lowpass_filter(current, cutoff_hz, fs)
+        voltage_filt = butterworth_lowpass_filter(voltage, cutoff_hz, fs)
+        temp_filt = butterworth_lowpass_filter(temp, cutoff_hz, fs)
+        chamber_temp_filt = butterworth_lowpass_filter(chamber_temp, cutoff_hz, fs)
+    else:
+        current_filt = current.copy()
+        voltage_filt = voltage.copy()
+        temp_filt = temp.copy()
+        chamber_temp_filt = chamber_temp.copy()
+
+    return {
+        "Time": time_s,
+        "Current_filt": current_filt,
+        "Voltage_filt": voltage_filt,
+        "Temp_degC_filt": temp_filt,
+        "Chamber_Temp_degC_filt": chamber_temp_filt,
+    }
 
 
 def compute_soc(time_s: np.ndarray, current_a: np.ndarray) -> np.ndarray:
@@ -86,9 +113,26 @@ def compute_soc(time_s: np.ndarray, current_a: np.ndarray) -> np.ndarray:
     return np.clip(soc, 0.0, 1.0)
 
 
-def process_file(df: pd.DataFrame, cutoff_hz: float = CUTOFF_HZ,
-                 scalers: dict[str, StandardScaler] | None = None) -> pd.DataFrame:
-    """Filter, normalize, and compute SOC for a single DataFrame.
+def _build_result_df(filt_data: dict[str, np.ndarray],
+                     norm_cols: np.ndarray) -> pd.DataFrame:
+    """Combine filtered data with normalized columns into a DataFrame."""
+    soc = compute_soc(filt_data["Time"], filt_data["Current_filt"])
+    return pd.DataFrame({
+        "Time": filt_data["Time"],
+        "Current_filt": filt_data["Current_filt"],
+        "Voltage_filt": filt_data["Voltage_filt"],
+        "Temp_degC_filt": filt_data["Temp_degC_filt"],
+        "Chamber_Temp_degC_filt": filt_data["Chamber_Temp_degC_filt"],
+        "Current_norm": norm_cols[:, 0],
+        "Voltage_norm": norm_cols[:, 1],
+        "Temp_degC_norm": norm_cols[:, 2],
+        "SOC": soc,
+    })
+
+
+def process_file(df: pd.DataFrame,
+                 cutoff_hz: float = CUTOFF_HZ) -> pd.DataFrame:
+    """Filter, normalize (Z Normalisation), and compute SOC for a single DataFrame.
 
     Parameters
     ----------
@@ -97,142 +141,53 @@ def process_file(df: pd.DataFrame, cutoff_hz: float = CUTOFF_HZ,
         Battery_Temp_degC, Chamber_Temp_degC.
     cutoff_hz : float
         Butterworth cutoff frequency in Hz.
-    scalers : dict or None
-        If provided, a dict mapping feature names to pre-fitted
-        StandardScaler objects. If None, new scalers are fitted on
-        this file's data (per-file normalization, not recommended).
+    scaler : StandardScaler or None
+        Pre-fitted StandardScaler for normalization. If None, a new
+        scaler is fitted on this file's data (per-file normalization,
+        not recommended).
     """
-    time_s = df["Time"].values.astype(np.float64)
+    filt_data = _filter_signals(df, cutoff_hz)
 
-    dt = np.diff(time_s)
-    valid_dt = dt[dt > 0]
-    fs = 1.0 / np.median(valid_dt) if len(valid_dt) > 0 else 1.0
-
-    current = df["Current"].values.astype(np.float64)
-    voltage = df["Voltage"].values.astype(np.float64)
-    temp = df["Battery_Temp_degC"].values.astype(np.float64)
-    chamber_temp = df["Chamber_Temp_degC"].values.astype(np.float64)
-
-    if fs > 2 * cutoff_hz:
-        current_filt = butterworth_lowpass_filter(current, cutoff_hz, fs)
-        voltage_filt = butterworth_lowpass_filter(voltage, cutoff_hz, fs)
-        temp_filt = butterworth_lowpass_filter(temp, cutoff_hz, fs)
-        chamber_temp_filt = butterworth_lowpass_filter(chamber_temp, cutoff_hz, fs)
-    else:
-        current_filt = current.copy()
-        voltage_filt = voltage.copy()
-        temp_filt = temp.copy()
-        chamber_temp_filt = chamber_temp.copy()
-
-    filt_data = {
-        "Current_filt": current_filt,
-        "Voltage_filt": voltage_filt,
-        "Temp_degC_filt": temp_filt,
-    }
-
-    norm_data = {}
-    for filt_name, norm_name in zip(SCALE_FEATURES, SCALE_OUTPUTS):
-        arr = filt_data[filt_name].reshape(-1, 1)
-        if scalers is not None and filt_name in scalers:
-            norm_data[norm_name] = scalers[filt_name].transform(arr).flatten()
-        else:
-            scaler = StandardScaler()
-            norm_data[norm_name] = scaler.fit_transform(arr).flatten()
-
-    soc = compute_soc(time_s, current_filt)
-
-    return pd.DataFrame({
-        "Time": time_s,
-        "Current_filt": current_filt,
-        "Voltage_filt": voltage_filt,
-        "Temp_degC_filt": temp_filt,
-        "Chamber_Temp_degC_filt": chamber_temp_filt,
-        "Current_norm": norm_data["Current_norm"],
-        "Voltage_norm": norm_data["Voltage_norm"],
-        "Temp_degC_norm": norm_data["Temp_degC_norm"],
-        "SOC": soc,
-    })
+    features = np.column_stack([
+        filt_data["Current_filt"],
+        filt_data["Voltage_filt"],
+        filt_data["Temp_degC_filt"],
+    ])
 
 
-def fit_scalers_from_training_data(source_dir: str,
-                                    train_filename: str) -> dict[str, StandardScaler]:
-    """Fit StandardScalers on the training cycle data only.
+    scaler = StandardScaler()
+    norm_cols = scaler.fit_transform(features)
 
-    Reads the raw training CSV, applies filtering, then fits a
-    StandardScaler on each feature (Current, Voltage, Temp).
-    Returns a dict mapping feature names to fitted scalers.
-    """
-    train_path = os.path.join(source_dir, "Drive cycles", train_filename)
-    if not os.path.isfile(train_path):
-        raise FileNotFoundError(
-            f"Training cycle file not found: {train_path}"
-        )
-
-    df = pd.read_csv(train_path)
-    required = {"Time", "Current", "Voltage", "Battery_Temp_degC", "Chamber_Temp_degC"}
-    if not required.issubset(df.columns):
-        raise ValueError(f"Training file missing columns: {required - set(df.columns)}")
-
-    time_s = df["Time"].values.astype(np.float64)
-    dt = np.diff(time_s)
-    valid_dt = dt[dt > 0]
-    fs = 1.0 / np.median(valid_dt) if len(valid_dt) > 0 else 1.0
-
-    current = df["Current"].values.astype(np.float64)
-    voltage = df["Voltage"].values.astype(np.float64)
-    temp = df["Battery_Temp_degC"].values.astype(np.float64)
-
-    if fs > 2 * CUTOFF_HZ:
-        current_filt = butterworth_lowpass_filter(current, CUTOFF_HZ, fs)
-        voltage_filt = butterworth_lowpass_filter(voltage, CUTOFF_HZ, fs)
-        temp_filt = butterworth_lowpass_filter(temp, CUTOFF_HZ, fs)
-    else:
-        current_filt = current
-        voltage_filt = voltage
-        temp_filt = temp
-
-    scalers = {}
-    for name, data in [
-        ("Current_filt", current_filt),
-        ("Voltage_filt", voltage_filt),
-        ("Temp_degC_filt", temp_filt),
-    ]:
-        scaler = StandardScaler()
-        scaler.fit(data.reshape(-1, 1))
-        scalers[name] = scaler
-
-    return scalers
-
-
-def save_scalers(scalers: dict[str, StandardScaler], dest_dir: str) -> None:
-    """Save scaler parameters (mean, std) to a JSON file."""
-    params = {}
-    for name, scaler in scalers.items():
-        params[name] = {
-            "mean": float(scaler.mean_[0]),
-            "scale": float(scaler.scale_[0]),
-        }
-    os.makedirs(dest_dir, exist_ok=True)
-    path = os.path.join(dest_dir, "scaler_params.json")
-    with open(path, "w") as f:
-        json.dump(params, f, indent=2)
-    print(f"Scaler parameters saved to {path}")
+    return _build_result_df(filt_data, norm_cols)
 
 
 def process_directory(source_dir: str, dest_dir: str,
                       cutoff_hz: float = CUTOFF_HZ) -> None:
     """Process all CSV files in *source_dir* and write to *dest_dir*.
 
-    Fits normalization scalers on the training cycle (LA92) and applies
-    them consistently to all other files. EIS CSV files are copied as-is.
+    Fits a single StandardScaler on the training cycle (LA92) and applies
+    it consistently to all other files. EIS CSV files are copied as-is.
     """
     import shutil
 
     os.makedirs(dest_dir, exist_ok=True)
 
-    print("Fitting scalers on training cycle...")
-    scalers = fit_scalers_from_training_data(source_dir, TRAIN_CYCLE_FILENAME)
-    save_scalers(scalers, dest_dir)
+    train_path = os.path.join(source_dir, "Drive cycles", TRAIN_CYCLE_FILENAME)
+    if not os.path.isfile(train_path):
+        raise FileNotFoundError(f"Training cycle file not found: {train_path}")
+
+    print("Fitting scaler on training cycle...")
+    train_df = pd.read_csv(train_path)
+    train_filt = _filter_signals(train_df, cutoff_hz)
+    train_features = np.column_stack([
+        train_filt["Current_filt"],
+        train_filt["Voltage_filt"],
+        train_filt["Temp_degC_filt"],
+    ])
+    scaler = StandardScaler()
+    scaler.fit(train_features)
+    print(f"  Scaler mean:  [{scaler.mean_[0]:.4f}, {scaler.mean_[1]:.4f}, {scaler.mean_[2]:.4f}]")
+    print(f"  Scaler scale: [{scaler.scale_[0]:.4f}, {scaler.scale_[1]:.4f}, {scaler.scale_[2]:.4f}]")
 
     for root, dirs, files in os.walk(source_dir):
         rel_path = os.path.relpath(root, source_dir)
@@ -260,7 +215,7 @@ def process_directory(source_dir: str, dest_dir: str,
                     missing = required - set(df.columns)
                     print(f"    Skipping (missing columns: {missing}).")
                     continue
-                result = process_file(df, cutoff_hz, scalers=scalers)
+                result = process_file(df, cutoff_hz)
                 result.to_csv(dest_path, index=False)
             except Exception as e:
                 print(f"    ERROR processing {filename}: {e}")
