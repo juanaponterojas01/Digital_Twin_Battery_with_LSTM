@@ -49,8 +49,8 @@ BETA = 0.1  # Physics loss weight (tunable via --beta)
 LR_FACTOR = 0.5  # ReduceLROnPlateau factor
 LR_PATIENCE = 5  # ReduceLROnPlateau patience
 
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"  # Compute device ("cuda" or "cpu")
-
+#DEVICE = "cuda" if torch.cuda.is_available() else "cpu"  # Compute device ("cuda" or "cpu")
+DEVICE = "cpu"
 C_NOMINAL = 2.9  # Nominal battery capacity in Ah (Panasonic 18650PF)
 ETA_CHARGE = 0.98  # Coulombic efficiency during charging
 ETA_DISCHARGE = 1.0  # Coulombic efficiency during discharging

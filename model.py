@@ -84,6 +84,8 @@ class VanillaLSTM(nn.Module):
         ValueError
             If dropout probability is 0 (MC uncertainty requires p > 0).
         """
+        # Set to train mode to enable dropout
+        self.train()
         if self.dropout.p == 0.0:
             raise ValueError(
                 "MC dropout uncertainty estimation requires dropout probability > 0. "
@@ -99,5 +101,7 @@ class VanillaLSTM(nn.Module):
         predictions = np.array(predictions)
         mean_pred = predictions.mean(axis=0)
         std_pred = predictions.std(axis=0)
+        # Return to eval mode for normal inference
+        self.eval()
 
         return mean_pred, std_pred

@@ -15,6 +15,7 @@ Usage:
 import argparse
 import json
 import os
+from typing import Dict, Any
 
 import matplotlib
 matplotlib.use("Agg")
@@ -67,7 +68,8 @@ def plot_training_curves_overlay(save_path):
 
     for name, label, color in [
         ("vanilla_lstm", "Vanilla LSTM", "tab:blue"),
-        ("physics_lstm", "Physics LSTM (β=0.1)", "tab:orange"),
+        ("physics_lstm", "Physics LSTM ", "tab:red"),
+        ("physics_lstm_no_dropout", "Physics LSTM (no dropout)", "tab:green"),
     ]:
         csv_path = os.path.join(TRAINED_DIR, f"training_stats_{name}.csv")
         if not os.path.isfile(csv_path):
@@ -102,29 +104,34 @@ def plot_training_curves_overlay(save_path):
     print(f"Saved: {save_path}")
 
 
-def build_comparison_table(all_results):
+def build_comparison_table(all_results:Dict[Any]):
     """Build a side-by-side comparison DataFrame."""
     cycles = config.TEST_CYCLES
-    rows = []
-    for c in cycles:
-        v = all_results["vanilla_lstm"][c]
-        p = all_results["physics_lstm"][c]
-        rmse_delta = ((p["RMSE"] - v["RMSE"]) / v["RMSE"]) * 100
-        mae_delta = ((p["MAE"] - v["MAE"]) / v["MAE"]) * 100
-        maxerr_delta = ((p["Max_Error"] - v["Max_Error"]) / v["Max_Error"]) * 100
-        rows.append({
-            "Cycle": c,
-            "Vanilla RMSE": f"{v['RMSE']:.4f}",
-            "Physics RMSE": f"{p['RMSE']:.4f}",
-            "Impr%": f"{rmse_delta:+.2f}",
-            "Vanilla MAE": f"{v['MAE']:.4f}",
-            "Physics MAE": f"{p['MAE']:.4f}",
-            "Impr%": f"{mae_delta:+.2f}",
-            "Vanilla MaxErr": f"{v['Max_Error']:.4f}",
-            "Physics MaxErr": f"{p['Max_Error']:.4f}",
-            "MaxErr Delta%": f"{maxerr_delta:+.2f}",
-        })
-    return pd.DataFrame(rows)
+    physics_models = ["physics_lstm", "physics_lstm_no_dropout"]
+    dataframes = []
+    for phys_model in physics_models:
+        rows = []
+        for c in cycles:
+            v = all_results["vanilla_lstm"][c]
+            p = all_results[phys_model][c]
+            rmse_delta = (( v["RMSE"] - p["RMSE"]) / v["RMSE"]) * 100
+            mae_delta = ((v["MAE"] - p["MAE"]) / v["MAE"]) * 100
+            maxerr_delta = ((v["Max_Error"] - p["Max_Error"]) / v["Max_Error"]) * 100
+            rows.append({
+                "Cycle": c,
+                "Vanilla RMSE": f"{v['RMSE']:.4f}",
+                "Physics RMSE": f"{p['RMSE']:.4f}",
+                "Impr%": f"{rmse_delta:+.2f}",
+                "Vanilla MAE": f"{v['MAE']:.4f}",
+                "Physics MAE": f"{p['MAE']:.4f}",
+                "Impr%": f"{mae_delta:+.2f}",
+                "Vanilla MaxErr": f"{v['Max_Error']:.4f}",
+                "Physics MaxErr": f"{p['Max_Error']:.4f}",
+                "MaxErr Delta%": f"{maxerr_delta:+.2f}",
+            })
+        dataframes.append(pd.DataFrame(rows))
+
+    return dataframes
 
 
 def _extract_true_soc(dataset: BatteryWindowDataset) -> np.ndarray:
@@ -207,13 +214,17 @@ def main():
 
     print("Loading models...")
     model_vanilla = load_model("vanilla_lstm", device)
-    model_physics = load_model("physics_lstm", device)
+    model_phys = load_model("physics_lstm", device)
+    model_phys_no_dropout = load_model("physics_lstm_no_dropout", device)
     if model_vanilla is None:
         raise FileNotFoundError("Checkpoint vanilla_lstm.pt not found")
-    if model_physics is None:
+    if model_phys is None:
         raise FileNotFoundError("Checkpoint physics_lstm.pt not found")
+    if model_phys_no_dropout is None:
+        raise FileNotFoundError("Checkpoint physics_lstm_no_dropout.pt not found")
 
-    all_results = {"vanilla_lstm": {}, "physics_lstm": {}}
+
+    all_results = {"vanilla_lstm": {}, "physics_lstm": {}, "physics_lstm_no_dropout": {}}
 
     for cycle_name in config.TEST_CYCLES:
         print(f"\n[{cycle_name}]")
@@ -221,29 +232,33 @@ def main():
         soc_true = _extract_true_soc(dataset)
 
         soc_vanilla = predict_cycle(model_vanilla, dataset, device)
-        soc_physics = predict_cycle(model_physics, dataset, device)
+        soc_phys = predict_cycle(model_phys, dataset, device)
+        soc_phys_no_dropout = predict_cycle(model_phys_no_dropout, dataset, device)
 
         metrics_v = compute_metrics(soc_true, soc_vanilla)
-        metrics_p = compute_metrics(soc_true, soc_physics)
+        metrics_p1 = compute_metrics(soc_true, soc_phys)
+        metrics_p2 = compute_metrics(soc_true, soc_phys_no_dropout)
         all_results["vanilla_lstm"][cycle_name] = metrics_v
-        all_results["physics_lstm"][cycle_name] = metrics_p
+        all_results["physics_lstm"][cycle_name] = metrics_p1
+        all_results["physics_lstm_no_dropout"][cycle_name] = metrics_p2
 
-        print(f"  Vanilla — RMSE={metrics_v['RMSE']:.4f}  MAE={metrics_v['MAE']:.4f}")
-        print(f"  Physics — RMSE={metrics_p['RMSE']:.4f}  MAE={metrics_p['MAE']:.4f}")
+        print(f"  Vanilla          — RMSE={metrics_v['RMSE']:.4f}  MAE={metrics_v['MAE']:.4f}")
+        print(f"  Physics          — RMSE={metrics_p1['RMSE']:.4f}  MAE={metrics_p1['MAE']:.4f}")
+        print(f"  Phys. no dropout — RMSE={metrics_p2['RMSE']:.4f}  MAE={metrics_p2['MAE']:.4f}")
 
         if not args.no_plots:
             soc_path = os.path.join(RESULTS_DIR, f"soc_predictions_{cycle_name}.png")
-            plot_soc_predictions(cycle_name, soc_true, soc_vanilla,
-                                 soc_physics, soc_path)
+            # plot_soc_predictions(cycle_name, soc_true, soc_vanilla,
+                                #  soc_physics, soc_path)
 
             mean_v, std_v = predict_cycle_with_uncertainty(
                 model_vanilla, dataset, device, n_iterations=args.mc_iterations)
-            mean_p, std_p = predict_cycle_with_uncertainty(
-                model_physics, dataset, device, n_iterations=args.mc_iterations)
+            mean_p1, std_p1 = predict_cycle_with_uncertainty(
+                model_phys, dataset, device, n_iterations=args.mc_iterations)
 
             mc_path = os.path.join(RESULTS_DIR, f"mc_uncertainty_{cycle_name}.png")
             plot_mc_uncertainty(cycle_name, soc_true,
-                                mean_v, std_v, mean_p, std_p, mc_path)
+                                mean_v, std_v, mean_p1, std_p1, mc_path)
 
     if not args.no_plots:
         train_path = os.path.join(RESULTS_DIR, "training_curves.png")
@@ -251,15 +266,27 @@ def main():
 
     comparison_df = build_comparison_table(all_results)
     print("\n" + "=" * 60)
-    print("Metrics Comparison:")
-    print(comparison_df.to_string(index=False))
+    print("\nMetrics Comparison: Vanilla LSTM vs Physics LSTM")
+    print(comparison_df[0].to_string(index=False))
+    print("\nMetrics Comparison: Vanilla LSTM vs Physics LSTM without dropout")
+    print(comparison_df[1].to_string(index=False))
 
-    json_path = os.path.join(RESULTS_DIR, "metrics_comparison.json")
-    with open(json_path, "w") as f:
-        json.dump(comparison_df.to_dict(orient="records"), f, indent=2)
-    print(f"\nSaved: {json_path}")
+    json_path_p1 = os.path.join(RESULTS_DIR, "comparison_vanilla_physics.json")
+    json_path_p2 = os.path.join(RESULTS_DIR, "comparison_vanilla_physics(no_dropout).json")
+
+    with open(json_path_p1, "w") as f:
+        json.dump(comparison_df[0].to_dict(orient="records"), f, indent=2)
+    print(f"\nSaved: {json_path_p1}")
+
+    with open(json_path_p2, "w") as f:
+        json.dump(comparison_df[1].to_dict(orient="records"), f, indent=2)
+    print(f"\nSaved: {json_path_p2}")
+
     print("Done.")
 
 
 if __name__ == "__main__":
-    main()
+    #main()
+    model = load_model("vanilla_lstm", device = "cpu")
+    pass
+    

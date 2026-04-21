@@ -7,6 +7,7 @@ import csv
 import json
 import logging
 import os
+import sys
 import time
 from dataclasses import dataclass
 
@@ -20,10 +21,10 @@ from model import VanillaLSTM
 from physics import PhysicsLoss, load_physics_coefficients
 from inference_utils import compute_metrics
 
-
 logger = logging.getLogger(__name__)
-
-effective_dropout = 0.0 if not config.DROPOUT_CONDITION else config.DROPOUT
+def _get_effective_dropout():
+    "Returns dropout value depending of condition and setted as config.DROPOUT"
+    return 0.0 if not config.DROPOUT_CONDITION else config.DROPOUT
 
 @dataclass
 class TrainingMetrics:
@@ -316,7 +317,7 @@ def _save_checkpoint(
         "beta": beta,
         "hidden_size": config.HIDDEN_SIZE,
         "num_layers": config.NUM_LAYERS,
-        "dropout": effective_dropout,
+        "dropout": _get_effective_dropout(),
         "dropout_condition": config.DROPOUT_CONDITION,
         "seq_len": config.SEQ_LEN,
     }
@@ -467,7 +468,7 @@ def train_model(
     print(f"\n{'=' * 60}")
     print(f"Training: {model_name}")
     print(f"Device: {device}")
-    print(f"Physics: {is_physics}  Beta: {beta}  Dropout: {effective_dropout}")
+    print(f"Physics: {is_physics}  Beta: {beta}  Dropout: {_get_effective_dropout()}")
     print(f"{'=' * 60}\n")
 
     os.makedirs(trained_models_dir, exist_ok=True)
@@ -480,7 +481,7 @@ def train_model(
         input_size=config.INPUT_SIZE,
         hidden_size=config.HIDDEN_SIZE,
         num_layers=config.NUM_LAYERS,
-        dropout=effective_dropout,
+        dropout=_get_effective_dropout(),
     ).to(device)
 
     total_params = sum(p.numel() for p in model.parameters())
