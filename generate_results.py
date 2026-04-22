@@ -12,12 +12,14 @@ Usage:
     python generate_results.py
     python generate_results.py --no-plots
 """
+
 import argparse
 import json
 import os
-from typing import Dict, Any
+from typing import Dict, Any, List
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
@@ -34,7 +36,10 @@ from inference_utils import (
 )
 
 MODEL_NAMES = ["vanilla_lstm", "physics_lstm"]
-MODEL_LABELS = {"vanilla_lstm": "Vanilla LSTM", "physics_lstm": "Physics LSTM (beta=0.1)"}
+MODEL_LABELS = {
+    "vanilla_lstm": "Vanilla LSTM",
+    "physics_lstm": "Physics LSTM (beta=0.1)",
+}
 MODEL_COLORS = {"vanilla_lstm": "tab:blue", "physics_lstm": "tab:orange"}
 
 RESULTS_DIR = os.path.join(config.PROJECT_DIR, "results")
@@ -67,9 +72,10 @@ def plot_training_curves_overlay(save_path):
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
 
     for name, label, color in [
-        ("vanilla_lstm", "Vanilla LSTM", "tab:blue"),
+        ("vanilla_lstm_no_dropout", "Vanilla LSTM (no dropout)", "tab:green"),
+        ("physics_lstm_no_dropout", "Physics LSTM (no dropout)", "tab:orange"),
         ("physics_lstm", "Physics LSTM ", "tab:red"),
-        ("physics_lstm_no_dropout", "Physics LSTM (no dropout)", "tab:green"),
+        ("vanilla_lstm", "Vanilla LSTM", "tab:blue"),
     ]:
         csv_path = os.path.join(TRAINED_DIR, f"training_stats_{name}.csv")
         if not os.path.isfile(csv_path):
@@ -79,10 +85,12 @@ def plot_training_curves_overlay(save_path):
         train_loss = df["train_loss"].astype(float)
         val_loss = df["val_loss"].astype(float)
 
-        axes[0].plot(epochs, train_loss, label=f"{label} (train)",
-                     color=color, linewidth=1.5)
-        axes[1].plot(epochs, val_loss, label=f"{label} (val)",
-                     color=color, linewidth=1.5)
+        axes[0].plot(
+            epochs, train_loss, label=f"{label} (train)", color=color, linewidth=1.5
+        )
+        axes[1].plot(
+            epochs, val_loss, label=f"{label} (val)", color=color, linewidth=1.5
+        )
 
     axes[0].set_xlabel("Epoch")
     axes[0].set_ylabel("Loss")
@@ -104,34 +112,39 @@ def plot_training_curves_overlay(save_path):
     print(f"Saved: {save_path}")
 
 
-def build_comparison_table(all_results:Dict[Any]):
-    """Build a side-by-side comparison DataFrame."""
-    cycles = config.TEST_CYCLES
-    physics_models = ["physics_lstm", "physics_lstm_no_dropout"]
-    dataframes = []
-    for phys_model in physics_models:
-        rows = []
-        for c in cycles:
-            v = all_results["vanilla_lstm"][c]
-            p = all_results[phys_model][c]
-            rmse_delta = (( v["RMSE"] - p["RMSE"]) / v["RMSE"]) * 100
-            mae_delta = ((v["MAE"] - p["MAE"]) / v["MAE"]) * 100
-            maxerr_delta = ((v["Max_Error"] - p["Max_Error"]) / v["Max_Error"]) * 100
-            rows.append({
-                "Cycle": c,
-                "Vanilla RMSE": f"{v['RMSE']:.4f}",
-                "Physics RMSE": f"{p['RMSE']:.4f}",
-                "Impr%": f"{rmse_delta:+.2f}",
-                "Vanilla MAE": f"{v['MAE']:.4f}",
-                "Physics MAE": f"{p['MAE']:.4f}",
-                "Impr%": f"{mae_delta:+.2f}",
-                "Vanilla MaxErr": f"{v['Max_Error']:.4f}",
-                "Physics MaxErr": f"{p['Max_Error']:.4f}",
-                "MaxErr Delta%": f"{maxerr_delta:+.2f}",
-            })
-        dataframes.append(pd.DataFrame(rows))
+def build_comparison_table(all_results: Dict[Any]) -> "pd.DataFrame":
+    """
+    Build a side-by-side comparison DataFrame.
+    args:
+        all_results: Dict[Any] - Dictionary with keys named like models to compare
 
-    return dataframes
+    """
+    cycles = config.TEST_CYCLES
+    dataframes = []
+    models = list(all_results.keys())
+    rows = []
+    for c in cycles:
+        v_no_dp = all_results[models[0]][c]
+        comp = all_results[models[1]][c]
+        rmse_delta = ((v_no_dp["RMSE"] - comp["RMSE"]) / v_no_dp["RMSE"]) * 100
+        mae_delta = ((v_no_dp["MAE"] - comp["MAE"]) / v_no_dp["MAE"]) * 100
+        maxerr_delta = ((v_no_dp["Max_Error"] - comp["Max_Error"]) / v_no_dp["Max_Error"]) * 100
+        rows.append(
+            {
+                "Cycle": c,
+                models[0] + "_RMSE": f"{v_no_dp['RMSE']:.4f}",
+                models[1] + "_RMSE": f"{comp['RMSE']:.4f}",
+                "RMSE_Impr%": f"{rmse_delta:+.2f}",
+                models[0] + "_MAE": f"{v_no_dp['MAE']:.4f}",
+                models[1] + "_MAE": f"{comp['MAE']:.4f}",
+                "MAE_Impr%": f"{mae_delta:+.2f}",
+                models[0] + "_MaxErr": f"{v_no_dp['Max_Error']:.4f}",
+                models[1] + "_MaxErr": f"{comp['Max_Error']:.4f}",
+                "MaxErr_Impr%": f"{maxerr_delta:+.2f}",
+            }
+        )
+
+    return pd.DataFrame(rows)
 
 
 def _extract_true_soc(dataset: BatteryWindowDataset) -> np.ndarray:
@@ -143,17 +156,23 @@ def _extract_true_soc(dataset: BatteryWindowDataset) -> np.ndarray:
     return np.concatenate(all_soc).flatten()
 
 
-def plot_soc_predictions(cycle_name, soc_true, soc_vanilla, soc_physics,
-                          save_path, max_points=MAX_PLOT_POINTS):
+def plot_soc_predictions(
+    cycle_name,
+    soc_true,
+    soc_vanilla,
+    soc_comparison,
+    save_path,
+    max_points=MAX_PLOT_POINTS,
+):
     """One plot per cycle: truth vs Vanilla vs Physics SOC."""
     soc_true_d, t = _decimate(soc_true, max_points)
     soc_vanilla_d, _ = _decimate(soc_vanilla, max_points)
-    soc_physics_d, _ = _decimate(soc_physics, max_points)
+    soc_comparison_d, _ = _decimate(soc_comparison, max_points)
 
     fig, ax = plt.subplots(figsize=(12, 5))
     ax.plot(t, soc_true_d, label="True SOC", color="tab:green", lw=1.5)
     ax.plot(t, soc_vanilla_d, label="Vanilla LSTM", color="tab:blue", lw=1)
-    ax.plot(t, soc_physics_d, label="Physics LSTM", color="tab:orange", lw=1)
+    ax.plot(t, soc_comparison_d, label="Physics LSTM", color="tab:orange", lw=1)
     ax.set_xlabel("Time Step")
     ax.set_ylabel("SOC")
     ax.set_title(f"SOC Predictions — {cycle_name}")
@@ -166,8 +185,16 @@ def plot_soc_predictions(cycle_name, soc_true, soc_vanilla, soc_physics,
     print(f"  Saved: {save_path}")
 
 
-def plot_mc_uncertainty(cycle_name, soc_true, mean_v, std_v, mean_p, std_p,
-                        save_path, max_points=MAX_PLOT_POINTS):
+def plot_mc_uncertainty(
+    cycle_name,
+    soc_true,
+    mean_v,
+    std_v,
+    mean_p,
+    std_p,
+    save_path,
+    max_points=MAX_PLOT_POINTS,
+):
     """Two subplots per cycle: MC uncertainty for Vanilla and Physics."""
     soc_true_d, t = _decimate(soc_true, max_points)
     mean_v_d, _ = _decimate(mean_v, max_points)
@@ -184,8 +211,7 @@ def plot_mc_uncertainty(cycle_name, soc_true, mean_v, std_v, mean_p, std_p,
         ax.plot(t, mean, label=label, color=color, lw=1)
         ci_lo = np.clip(mean - 1.96 * std, 0, 1)
         ci_hi = np.clip(mean + 1.96 * std, 0, 1)
-        ax.fill_between(t, ci_lo, ci_hi, color=color, alpha=0.2,
-                        label="95% CI")
+        ax.fill_between(t, ci_lo, ci_hi, color=color, alpha=0.2, label="95% CI")
         ax.set_xlabel("Time Step")
         ax.set_ylabel("SOC")
         ax.set_title(f"{label} — {cycle_name}")
@@ -199,13 +225,62 @@ def plot_mc_uncertainty(cycle_name, soc_true, mean_v, std_v, mean_p, std_p,
     print(f"  Saved: {save_path}")
 
 
+def plot_metric_heatmaps(all_results: Dict[str, Dict], save_dir: str):
+    """Create heatmaps comparing RMSE and MAE across models and cycles."""
+    model_labels = {
+        "vanilla_lstm_dp0%": "Vanilla LSTM (dp=0%)",
+        "physics_lstm_dp0%": "Physics LSTM (dp=0%)",
+        "vanilla_lstm_dp5%": "Vanilla LSTM (dp=5%)",
+        "physics_lstm_dp5%": "Physics LSTM (dp=5%)",
+    }
+    cycles = config.TEST_CYCLES
+    model_names = list(all_results.keys())
+
+    for metric in ["RMSE", "MAE"]:
+        data = []
+        for c in cycles:
+            row = [all_results[m][c][metric] for m in model_names]
+            data.append(row)
+
+        data = np.array(data)
+        fig, ax = plt.subplots(figsize=(10, 6))
+        cmap = matplotlib.cm.viridis
+        im = ax.imshow(data, aspect="auto", cmap=cmap)
+        ax.set_xticks(range(len(model_names)))
+        ax.set_xticklabels([model_labels[m] for m in model_names], rotation=30, ha="right", fontsize=9)
+        ax.set_yticks(range(len(cycles)))
+        ax.set_yticklabels(cycles, fontsize=9)
+        ax.set_xlabel("Model")
+        ax.set_ylabel("Drive Cycle")
+        ax.set_title(f"{metric} Comparison Across Models and Cycles")
+
+        for i in range(len(cycles)):
+            for j in range(len(model_names)):
+                ax.text(j, i, f"{data[i, j]:.4f}", ha="center", va="center", fontsize=8, color="black")
+
+        fig.colorbar(im, ax=ax, label=metric)
+        plt.tight_layout()
+        save_path = os.path.join(save_dir, f"heatmap_{metric.lower()}.png")
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        print(f"Saved: {save_path}")
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description="Generate evaluation results for SOC estimation models")
-    parser.add_argument("--no-plots", action="store_true",
-                        help="Skip plot generation (only compute metrics JSON)")
-    parser.add_argument("--mc-iterations", type=int, default=50,
-                        help="Number of MC dropout forward passes for uncertainty (default: 50)")
+        description="Generate evaluation results for SOC estimation models"
+    )
+    parser.add_argument(
+        "--no-plots",
+        action="store_true",
+        help="Skip plot generation (only compute metrics JSON)",
+    )
+    parser.add_argument(
+        "--mc-iterations",
+        type=int,
+        default=50,
+        help="Number of MC dropout forward passes for uncertainty (default: 50)",
+    )
     args = parser.parse_args()
 
     os.makedirs(RESULTS_DIR, exist_ok=True)
@@ -213,9 +288,11 @@ def main():
     print(f"Device: {device}")
 
     print("Loading models...")
+    model_vanilla_no_dropout = load_model("vanilla_lstm_no_dropout", device)
+    model_phys_no_dropout = load_model("physics_lstm_no_dropout", device)
     model_vanilla = load_model("vanilla_lstm", device)
     model_phys = load_model("physics_lstm", device)
-    model_phys_no_dropout = load_model("physics_lstm_no_dropout", device)
+  
     if model_vanilla is None:
         raise FileNotFoundError("Checkpoint vanilla_lstm.pt not found")
     if model_phys is None:
@@ -223,70 +300,77 @@ def main():
     if model_phys_no_dropout is None:
         raise FileNotFoundError("Checkpoint physics_lstm_no_dropout.pt not found")
 
-
-    all_results = {"vanilla_lstm": {}, "physics_lstm": {}, "physics_lstm_no_dropout": {}}
+    all_metrics = {
+        "vanilla_lstm_dp0%": {},
+        "physics_lstm_dp0%": {},
+        "vanilla_lstm_dp5%": {},
+        "physics_lstm_dp5%": {},
+    }
 
     for cycle_name in config.TEST_CYCLES:
         print(f"\n[{cycle_name}]")
         dataset, _ = _load_cycle_dataset(cycle_name)
         soc_true = _extract_true_soc(dataset)
 
+        soc_vanilla_no_dp = predict_cycle(model_vanilla_no_dropout, dataset, device)
+        soc_phys_no_dp = predict_cycle(model_phys_no_dropout, dataset, device)
         soc_vanilla = predict_cycle(model_vanilla, dataset, device)
         soc_phys = predict_cycle(model_phys, dataset, device)
-        soc_phys_no_dropout = predict_cycle(model_phys_no_dropout, dataset, device)
 
+        metrics_v_no_dp = compute_metrics(soc_true, soc_vanilla_no_dp)
+        metrics_p_no_dp = compute_metrics(soc_true, soc_phys_no_dp)
         metrics_v = compute_metrics(soc_true, soc_vanilla)
-        metrics_p1 = compute_metrics(soc_true, soc_phys)
-        metrics_p2 = compute_metrics(soc_true, soc_phys_no_dropout)
-        all_results["vanilla_lstm"][cycle_name] = metrics_v
-        all_results["physics_lstm"][cycle_name] = metrics_p1
-        all_results["physics_lstm_no_dropout"][cycle_name] = metrics_p2
+        metrics_p = compute_metrics(soc_true, soc_phys)
 
-        print(f"  Vanilla          — RMSE={metrics_v['RMSE']:.4f}  MAE={metrics_v['MAE']:.4f}")
-        print(f"  Physics          — RMSE={metrics_p1['RMSE']:.4f}  MAE={metrics_p1['MAE']:.4f}")
-        print(f"  Phys. no dropout — RMSE={metrics_p2['RMSE']:.4f}  MAE={metrics_p2['MAE']:.4f}")
+        all_metrics["vanilla_lstm_dp0%"][cycle_name] = metrics_v_no_dp
+        all_metrics["physics_lstm_dp0%"][cycle_name] = metrics_p_no_dp
+        all_metrics["vanilla_lstm_dp5%"][cycle_name] = metrics_v
+        all_metrics["physics_lstm_dp5%"][cycle_name] = metrics_p
 
         if not args.no_plots:
-            soc_path = os.path.join(RESULTS_DIR, f"soc_predictions_{cycle_name}.png")
+            # soc_path = os.path.join(RESULTS_DIR, f"soc_predictions_{cycle_name}.png")
             # plot_soc_predictions(cycle_name, soc_true, soc_vanilla,
-                                #  soc_physics, soc_path)
+            #  soc_phys, soc_path)  #Uncomment tp plot predictions
 
             mean_v, std_v = predict_cycle_with_uncertainty(
-                model_vanilla, dataset, device, n_iterations=args.mc_iterations)
-            mean_p1, std_p1 = predict_cycle_with_uncertainty(
-                model_phys, dataset, device, n_iterations=args.mc_iterations)
+                model_vanilla, dataset, device, n_iterations=args.mc_iterations
+            )
+            mean_p, std_p = predict_cycle_with_uncertainty(
+                model_phys, dataset, device, n_iterations=args.mc_iterations
+            )
 
             mc_path = os.path.join(RESULTS_DIR, f"mc_uncertainty_{cycle_name}.png")
-            plot_mc_uncertainty(cycle_name, soc_true,
-                                mean_v, std_v, mean_p1, std_p1, mc_path)
+            plot_mc_uncertainty(
+                cycle_name, soc_true, mean_v, std_v, mean_p, std_p, mc_path
+            )
 
     if not args.no_plots:
         train_path = os.path.join(RESULTS_DIR, "training_curves.png")
         plot_training_curves_overlay(train_path)
+        plot_metric_heatmaps(all_metrics, RESULTS_DIR)
 
-    comparison_df = build_comparison_table(all_results)
-    print("\n" + "=" * 60)
-    print("\nMetrics Comparison: Vanilla LSTM vs Physics LSTM")
-    print(comparison_df[0].to_string(index=False))
-    print("\nMetrics Comparison: Vanilla LSTM vs Physics LSTM without dropout")
-    print(comparison_df[1].to_string(index=False))
+    comparison_1 = {k: v for k, v in all_metrics.items() if k in ["vanilla_lstm_dp0%", "physics_lstm_dp0%"]}
+    comparison_2 = {k: v for k, v in all_metrics.items() if k in ["vanilla_lstm_dp5%", "physics_lstm_dp5%"]}
 
-    json_path_p1 = os.path.join(RESULTS_DIR, "comparison_vanilla_physics.json")
-    json_path_p2 = os.path.join(RESULTS_DIR, "comparison_vanilla_physics(no_dropout).json")
-
-    with open(json_path_p1, "w") as f:
-        json.dump(comparison_df[0].to_dict(orient="records"), f, indent=2)
-    print(f"\nSaved: {json_path_p1}")
-
-    with open(json_path_p2, "w") as f:
-        json.dump(comparison_df[1].to_dict(orient="records"), f, indent=2)
-    print(f"\nSaved: {json_path_p2}")
+    for result_dic in [comparison_1, comparison_2]:
+        comparison_df = build_comparison_table(result_dic)
+        models = list(result_dic.keys())
+        json_path = os.path.join(RESULTS_DIR, f"{models[0]}_vs_{models[1]}.json")
+        with open(json_path, "w") as f:
+            json.dump(comparison_df.to_dict(orient="records"), f, indent=2)
+        print(f"\nSaved: {json_path}")
 
     print("Done.")
 
 
 if __name__ == "__main__":
-    #main()
-    model = load_model("vanilla_lstm", device = "cpu")
+    main()
+    # model_1 = load_model("vanilla_lstm", device="cpu")
+    # model_2 = load_model("vanilla_lstm_no_dropout", device="cpu")
+    # model_3 = load_model("physics_lstm", device="cpu")
+    # model_4 = load_model("physics_lstm_no_dropout", device="cpu")
+    # print(model_1)
+    # print(model_2)
+    # print(model_3)
+    # print(model_4)
     pass
-    

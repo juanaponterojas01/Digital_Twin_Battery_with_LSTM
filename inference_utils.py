@@ -149,3 +149,4 @@ def predict_cycle_with_uncertainty(
         batch_x, n_iterations=n_iterations
     )
     return mean_soc.flatten(), std_soc.flatten()
+
